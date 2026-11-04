@@ -1,55 +1,55 @@
 # PDF Text Replacement Tool
 
-Utility da riga di comando per sostituire testo in un PDF creando un nuovo file, senza modificare il sorgente.
+A command-line utility for replacing text in a PDF while creating a new file and leaving the source unchanged.
 
-La sostituzione conserva, quando il font è incorporato nel PDF:
+When the font is embedded in the PDF, the replacement preserves:
 
-- famiglia e variante del font;
-- dimensione;
-- grassetto e corsivo;
-- colore;
-- linea di base e orientamento cardinale del testo.
+- font family and variant;
+- font size;
+- bold and italic styling;
+- color;
+- baseline and cardinal text orientation.
 
-Se il font originale non è incorporato, lo script usa un font PDF standard coerente con le caratteristiche disponibili (serif/sans-serif/monospaziato, normale/grassetto/corsivo).
+If the original font is not embedded, the script uses a standard PDF font that matches the available characteristics (serif/sans-serif/monospaced, regular/bold/italic).
 
-## Requisiti
+## Requirements
 
-- Python 3.10 o successivo
+- Python 3.10 or later
 - PyMuPDF
 
 ```bash
 pip install pymupdf
 ```
 
-## Utilizzo
+## Usage
 
 ```bash
-python pdf_replace.py "TESTO_DA_CERCARE" "TESTO_NUOVO" "sorgente.pdf" "destinazione.pdf"
+python pdf_replace.py "TEXT_TO_FIND" "REPLACEMENT_TEXT" "source.pdf" "destination.pdf"
 ```
 
-Il file di destinazione è facoltativo. Se viene omesso, viene creato automaticamente accanto al sorgente con il suffisso `_replaced`:
+The destination file is optional. If omitted, it is automatically created next to the source file with the `_replaced` suffix:
 
 ```bash
-python pdf_replace.py "Mario Rossi" "Luigi Bianchi" "documento.pdf"
+python pdf_replace.py "Mario Rossi" "Luigi Bianchi" "document.pdf"
 ```
 
-L'esempio genera `documento_replaced.pdf` e lascia `documento.pdf` invariato.
+This example creates `document_replaced.pdf` and leaves `document.pdf` unchanged.
 
-## Come funziona
+## How It Works
 
-1. Cerca tutte le occorrenze del testo in ogni pagina.
-2. Rileva lo span tipografico che copre ogni occorrenza.
-3. Estrae e registra il font incorporato nel PDF, inclusa la variante bold/italic.
-4. Rimuove soltanto il testo originale tramite redaction, preservando immagini e grafica vettoriale.
-5. Inserisce il nuovo testo sulla linea di base originale con dimensione, colore e orientamento rilevati.
-6. Salva il risultato in un nuovo PDF; sorgente e destinazione non possono coincidere.
+1. Searches every page for all occurrences of the specified text.
+2. Identifies the text span that covers each occurrence.
+3. Extracts and registers the font embedded in the PDF, including its bold/italic variant.
+4. Removes only the original text through redaction while preserving images and vector graphics.
+5. Inserts the replacement on the original baseline using the detected size, color, and orientation.
+6. Saves the result as a new PDF; the source and destination paths cannot be the same.
 
-## Note
+## Notes
 
-- Se il testo sostitutivo è molto più lungo dell'originale, può sovrapporsi ad altri elementi: la dimensione viene mantenuta intenzionalmente per rispettare la formattazione sorgente.
-- Il matching di PyMuPDF non distingue maiuscole e minuscole.
-- Per testi composti da più stili, viene mantenuto lo stile dello span che occupa la parte maggiore dell'occorrenza.
+- If the replacement is much longer than the original text, it may overlap other elements. The font size is intentionally preserved to maintain the source formatting.
+- PyMuPDF text matching is case-insensitive.
+- If an occurrence contains multiple styles, the script preserves the style of the span that covers most of it.
 
-## Licenza
+## License
 
 MIT
