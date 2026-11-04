@@ -1,110 +1,229 @@
-import fitz
-import os
 import argparse
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
-def replace_text_in_pdf(file_path, search_str, replace_str):
-    """Replaces text in a single PDF file using redaction."""
-    try:
-        doc = fitz.open(file_path)
-    except Exception as e:
-        print(f"Error opening {file_path}: {e}")
-        return False
+import fitz
 
-    changed = False
-    for page in doc:
-        # Search for the string
-        text_instances = page.search_for(search_str)
-        if not text_instances:
-            continue
-            
-        changed = True
-        replacements = []
-        
-        for inst in text_instances:
-            # Try to capture original font size
-            text_dict = page.get_text("dict", clip=inst)
-            font_size = 10 # Default
-            try:
-                if text_dict["blocks"]:
-                    for block in text_dict["blocks"]:
-                        if "lines" in block:
-                            for line in block["lines"]:
-                                for span in line["spans"]:
-                                    if search_str.lower() in span["text"].lower():
-                                        font_size = span["size"]
-                                        break
-            except:
-                pass
 
-            # Apply redaction (white out the old text)
-            page.add_redact_annot(inst, fill=(1, 1, 1))
-            replacements.append((inst.x0, inst.y0, font_size))
-            
-        page.apply_redactions()
-        
-        # Insert new text
-        for x0, y0, f_size in replacements:
-            # Using standard Helvetica (helv) as it's built into PDFs
-            page.insert_text((x0, y0 + f_size * 0.85), replace_str, 
-                             fontsize=f_size, fontname="helv", color=(0, 0, 0))
-            
-    if changed:
-        temp_path = file_path + ".tmp_repl"
+@dataclass
+class TextStyle:
+    font: str = "Helvetica"
+    size: float = 10.0
+    color: tuple = (0.0, 0.0, 0.0)
+    flags: int = 0
+    baseline: float | None = None
+    direction: tuple = (1.0, 0.0)
+
+
+def _normalise_font_name(name):
+    """Remove a PDF subset prefix and punctuation used only as separators."""
+    name = (name or "").split("+", 1)[-1]
+    return "".join(char.lower() for char in name if char.isalnum())
+
+
+def _intersection_area(first, second):
+    intersection = fitz.Rect(first) & fitz.Rect(second)
+    return max(0.0, intersection.width) * max(0.0, intersection.height)
+
+
+def _style_for_match(page, match_rect):
+    """Return the style of the span that covers most of a search result."""
+    best_style = TextStyle()
+    best_area = -1.0
+
+    for block in page.get_text("dict").get("blocks", []):
+        for line in block.get("lines", []):
+            direction = tuple(line.get("dir", (1.0, 0.0)))
+            for span in line.get("spans", []):
+                if not span.get("text"):
+                    continue
+                area = _intersection_area(span["bbox"], match_rect)
+                if area <= best_area:
+                    continue
+                best_area = area
+                best_style = TextStyle(
+                    font=span.get("font", "Helvetica"),
+                    size=float(span.get("size", 10.0)),
+                    color=fitz.sRGB_to_pdf(span.get("color", 0)),
+                    flags=int(span.get("flags", 0)),
+                    baseline=float(span.get("origin", (0.0, match_rect.y1))[1]),
+                    direction=direction,
+                )
+
+    return best_style
+
+
+def _base14_font_for_style(style):
+    """Choose a styled built-in fallback when the original font is not embedded."""
+    bold = bool(style.flags & fitz.TEXT_FONT_BOLD)
+    italic = bool(style.flags & fitz.TEXT_FONT_ITALIC)
+    serif = bool(style.flags & fitz.TEXT_FONT_SERIFED)
+    mono = bool(style.flags & fitz.TEXT_FONT_MONOSPACED)
+    family = "cour" if mono else "tiro" if serif else "helv"
+    variants = {
+        (False, False): family,
+        (True, False): {"cour": "cobo", "tiro": "tibo", "helv": "hebo"}[family],
+        (False, True): {"cour": "coit", "tiro": "tiit", "helv": "heit"}[family],
+        (True, True): {"cour": "cobi", "tiro": "tibi", "helv": "hebi"}[family],
+    }
+    return variants[(bold, italic)]
+
+
+def _font_resource_for_style(doc, page, style, cache):
+    """Register an extracted embedded font and return its page resource name."""
+    key = _normalise_font_name(style.font)
+    if key in cache:
+        return cache[key]
+
+    candidates = []
+    for font in page.get_fonts(full=True):
+        xref, _ext, _type, basefont, resource_name = font[:5]
+        base_key = _normalise_font_name(basefont)
+        if key == base_key:
+            candidates.append((0, xref, resource_name))
+        elif key and (key in base_key or base_key in key):
+            candidates.append((1, xref, resource_name))
+
+    # An exact family+variant match must win over a partial family match:
+    # e.g. DejaVuSansCondensed-Bold must not resolve to DejaVuSansCondensed.
+    for _score, xref, _resource_name in sorted(candidates):
         try:
-            doc.save(temp_path)
-            doc.close()
-            os.replace(temp_path, file_path)
-            print(f"Successfully updated: {file_path}")
-            return True
-        except PermissionError:
-            doc.close()
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            print(f"PERMISSION ERROR: Could not save {file_path}. Is it open in another program?")
+            _name, _ext, _type, font_buffer = doc.extract_font(xref)
+            if font_buffer:
+                resource = f"RPL{len(cache) + 1}"
+                page.insert_font(fontname=resource, fontbuffer=font_buffer)
+                cache[key] = resource
+                return resource
+        except (RuntimeError, ValueError):
+            pass
+
+    fallback = _base14_font_for_style(style)
+    cache[key] = fallback
+    print(
+        f"Warning: font '{style.font}' is not embedded; using '{fallback}' as fallback.",
+        file=sys.stderr,
+    )
+    return fallback
+
+
+def _rotation_for_direction(direction):
+    x, y = direction
+    cardinal = {(1, 0): 0, (0, -1): 90, (-1, 0): 180, (0, 1): 270}
+    rounded = (round(x), round(y))
+    if abs(x - rounded[0]) < 0.01 and abs(y - rounded[1]) < 0.01:
+        return cardinal.get(rounded, 0)
+    return 0
+
+
+def _insertion_point(match_rect, style, rotation):
+    """Place the replacement on the original baseline for cardinal text."""
+    baseline = style.baseline
+    if rotation == 90:
+        return fitz.Point(match_rect.x0, match_rect.y1)
+    if rotation == 180:
+        return fitz.Point(match_rect.x1, baseline or match_rect.y0)
+    if rotation == 270:
+        return fitz.Point(match_rect.x1, match_rect.y0)
+    return fitz.Point(match_rect.x0, baseline or match_rect.y1)
+
+
+def replace_text_in_pdf(source_path, destination_path, search_str, replace_str):
+    """Create a new PDF with matching text replaced and its style preserved."""
+    source_path = Path(source_path).resolve()
+    destination_path = Path(destination_path).resolve()
+
+    if source_path == destination_path:
+        raise ValueError("Source and destination must be different files.")
+    if not source_path.is_file() or source_path.suffix.lower() != ".pdf":
+        raise ValueError(f"Invalid source PDF: {source_path}")
+    if destination_path.suffix.lower() != ".pdf":
+        raise ValueError("The destination file must have a .pdf extension.")
+
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    doc = fitz.open(source_path)
+    changed = False
+    replacement_count = 0
+
+    try:
+        for page in doc:
+            matches = page.search_for(search_str)
+            if not matches:
+                continue
+
+            changed = True
+            replacements = []
+            font_cache = {}
+
+            # Capture styling before redaction changes the page text layer.
+            for match in matches:
+                style = _style_for_match(page, match)
+                replacements.append((fitz.Rect(match), style))
+                page.add_redact_annot(match, fill=(1, 1, 1))
+
+            # Keep images and vector graphics intact while removing only text.
+            page.apply_redactions(images=0, graphics=0, text=0)
+
+            for match, style in replacements:
+                resource = _font_resource_for_style(doc, page, style, font_cache)
+                rotation = _rotation_for_direction(style.direction)
+                page.insert_text(
+                    _insertion_point(match, style, rotation),
+                    replace_str,
+                    fontsize=style.size,
+                    fontname=resource,
+                    color=style.color,
+                    rotate=rotation,
+                    overlay=True,
+                )
+                replacement_count += 1
+
+        if not changed:
+            print(f"No matches found in: {source_path}")
             return False
-        except Exception as e:
-            doc.close()
-            print(f"ERROR saving {file_path}: {e}")
-            return False
-    else:
+
+        # Garbage collection removes the redacted text from the saved file.
+        doc.save(destination_path, garbage=4, deflate=True)
+    finally:
         doc.close()
-        print(f"No matches found in: {file_path}")
-        return False
+
+    suffix = "s" if replacement_count != 1 else ""
+    print(f"Created: {destination_path} ({replacement_count} replacement{suffix})")
+    return True
+
+
+def _default_destination(source):
+    source = Path(source)
+    return source.with_name(f"{source.stem}_replaced.pdf")
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Generic PDF text replacement tool.")
-    parser.add_argument("search", help="The text string to search for")
-    parser.add_argument("replace", help="The text string to replace it with")
-    parser.add_argument("paths", nargs="+", help="One or more PDF files or directories to process")
-    
+    parser = argparse.ArgumentParser(
+        description=(
+            "Replace text in a source PDF, preserve its font styling, and write "
+            "the result to a separate destination PDF."
+        )
+    )
+    parser.add_argument("search", help="Text to search for")
+    parser.add_argument("replace", help="Replacement text")
+    parser.add_argument("source", help="Source PDF (never modified)")
+    parser.add_argument(
+        "destination",
+        nargs="?",
+        help="Destination PDF (default: SOURCE_replaced.pdf)",
+    )
     args = parser.parse_args()
 
-    files_to_process = []
-    for path in args.paths:
-        if os.path.isdir(path):
-            for f in os.listdir(path):
-                if f.lower().endswith(".pdf"):
-                    files_to_process.append(os.path.join(path, f))
-        elif os.path.isfile(path):
-            if path.lower().endswith(".pdf"):
-                files_to_process.append(path)
-            else:
-                print(f"Skipping non-PDF file: {path}")
-        else:
-            print(f"Path not found: {path}")
+    destination = args.destination or _default_destination(args.source)
+    try:
+        changed = replace_text_in_pdf(
+            args.source, destination, args.search, args.replace
+        )
+    except (ValueError, OSError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    return 0 if changed else 2
 
-    if not files_to_process:
-        print("No valid PDF files identified to process.")
-        sys.exit(1)
-
-    print(f"Searching for '{args.search}' and replacing with '{args.replace}'...")
-    success_count = 0
-    for file_path in files_to_process:
-        if replace_text_in_pdf(file_path, args.search, args.replace):
-            success_count += 1
-    
-    print(f"\nDone. Processed {len(files_to_process)} files. {success_count} files were modified.")
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

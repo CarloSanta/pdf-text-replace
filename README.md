@@ -1,62 +1,55 @@
 # PDF Text Replacement Tool
 
-A simple, generic command-line utility to search and replace text strings within PDF files. 
+Utility da riga di comando per sostituire testo in un PDF creando un nuovo file, senza modificare il sorgente.
 
-This tool uses the **PyMuPDF** library to identify text locations, redact (remove) the original text, and overlay new text in the same position while attempting to maintain the original font size.
+La sostituzione conserva, quando il font è incorporato nel PDF:
 
-## Features
-- **Redaction-based replacement:** Properly removes old text rather than just covering it.
-- **Font Size Detection:** Scans the original document to match the font size of the replacement text.
-- **Batch Processing:** Can process individual files, a list of files, or entire directories.
-- **Standard PDF Fonts:** Uses standard Helvetica to ensure maximum compatibility without external font files.
+- famiglia e variante del font;
+- dimensione;
+- grassetto e corsivo;
+- colore;
+- linea di base e orientamento cardinale del testo.
 
-## Prerequisites
+Se il font originale non è incorporato, lo script usa un font PDF standard coerente con le caratteristiche disponibili (serif/sans-serif/monospaziato, normale/grassetto/corsivo).
 
-You must have **Python 3** installed and the **PyMuPDF** library:
+## Requisiti
+
+- Python 3.10 o successivo
+- PyMuPDF
 
 ```bash
 pip install pymupdf
 ```
 
-## Installation
-
-Simply copy `pdf_replace.py` to your desired working directory.
-
-## Usage
-
-Run the script using the following syntax:
+## Utilizzo
 
 ```bash
-python pdf_replace.py "SEARCH_STRING" "REPLACE_STRING" "PATH_TO_FILES_OR_DIRS"
+python pdf_replace.py "TESTO_DA_CERCARE" "TESTO_NUOVO" "sorgente.pdf" "destinazione.pdf"
 ```
 
-### Examples
+Il file di destinazione è facoltativo. Se viene omesso, viene creato automaticamente accanto al sorgente con il suffisso `_replaced`:
 
-**1. Replace text in a specific file:**
 ```bash
-python pdf_replace.py "Old Text" "New Text" "example.pdf"
+python pdf_replace.py "Mario Rossi" "Luigi Bianchi" "documento.pdf"
 ```
 
-**2. Replace text in all PDF files in the current folder:**
-```bash
-python pdf_replace.py "old text" "new text" "."
-```
+L'esempio genera `documento_replaced.pdf` e lascia `documento.pdf` invariato.
 
-**3. Replace text across multiple paths:**
-```bash
-python pdf_replace.py "OLD TEXT" "NEW TEXT" "dir1/" "dir2/example.pdf"
-```
+## Come funziona
 
-## How it Works
-1. **Search:** The script locates all occurrences of the search string on every page.
-2. **Analysis:** It inspects the surrounding text blocks to determine the original font size.
-3. **Redaction:** It creates a redaction annotation over the original text, effectively "whiting it out."
-4. **Insertion:** It inserts the new string at the exact same coordinates (X, Y) using the detected font size.
-5. **Safe Save:** It saves to a temporary file first, then replaces the original to prevent data loss in case of a crash.
+1. Cerca tutte le occorrenze del testo in ogni pagina.
+2. Rileva lo span tipografico che copre ogni occorrenza.
+3. Estrae e registra il font incorporato nel PDF, inclusa la variante bold/italic.
+4. Rimuove soltanto il testo originale tramite redaction, preservando immagini e grafica vettoriale.
+5. Inserisce il nuovo testo sulla linea di base originale con dimensione, colore e orientamento rilevati.
+6. Salva il risultato in un nuovo PDF; sorgente e destinazione non possono coincidere.
 
-## Troubleshooting
-- **Permission Errors:** If you receive a "Permission Denied" error, ensure the PDF file is not open in another application (like Adobe Acrobat or Chrome).
-- **Complex Layouts:** In some highly complex or layered PDFs, the text extraction may vary. Always keep a backup of your original files before running batch replacements.
+## Note
 
-## License
+- Se il testo sostitutivo è molto più lungo dell'originale, può sovrapporsi ad altri elementi: la dimensione viene mantenuta intenzionalmente per rispettare la formattazione sorgente.
+- Il matching di PyMuPDF non distingue maiuscole e minuscole.
+- Per testi composti da più stili, viene mantenuto lo stile dello span che occupa la parte maggiore dell'occorrenza.
+
+## Licenza
+
 MIT
