@@ -16,6 +16,12 @@ class TextStyle:
     direction: tuple = (1.0, 0.0)
 
 
+@dataclass
+class FontResource:
+    name: str
+    font: fitz.Font
+
+
 def _normalise_font_name(name):
     """Remove a PDF subset prefix and punctuation used only as separators."""
     name = (name or "").split("+", 1)[-1]
@@ -71,7 +77,7 @@ def _base14_font_for_style(style):
 
 
 def _font_resource_for_style(doc, page, style, cache):
-    """Register an extracted embedded font and return its page resource name."""
+    """Register a font and return its page resource plus a measuring font."""
     key = _normalise_font_name(style.font)
     if key in cache:
         return cache[key]
@@ -93,18 +99,22 @@ def _font_resource_for_style(doc, page, style, cache):
             if font_buffer:
                 resource = f"RPL{len(cache) + 1}"
                 page.insert_font(fontname=resource, fontbuffer=font_buffer)
-                cache[key] = resource
-                return resource
+                cached = FontResource(
+                    resource, fitz.Font(fontbuffer=font_buffer)
+                )
+                cache[key] = cached
+                return cached
         except (RuntimeError, ValueError):
             pass
 
     fallback = _base14_font_for_style(style)
-    cache[key] = fallback
+    cached = FontResource(fallback, fitz.Font(fontname=fallback))
+    cache[key] = cached
     print(
         f"Warning: font '{style.font}' is not embedded; using '{fallback}' as fallback.",
         file=sys.stderr,
     )
-    return fallback
+    return cached
 
 
 def _rotation_for_direction(direction):
@@ -116,19 +126,30 @@ def _rotation_for_direction(direction):
     return 0
 
 
-def _insertion_point(match_rect, style, rotation):
-    """Place the replacement on the original baseline for cardinal text."""
+def _insertion_point(match_rect, style, rotation, text_length, alignment):
+    """Place replacement on its original baseline and align it in the old width."""
     baseline = style.baseline
+    available_length = (
+        match_rect.height if rotation in (90, 270) else match_rect.width
+    )
+    offset = (available_length - text_length) / 2 if alignment == "center" else 0
+
     if rotation == 90:
-        return fitz.Point(match_rect.x0, match_rect.y1)
+        return fitz.Point(match_rect.x0, match_rect.y1 - offset)
     if rotation == 180:
-        return fitz.Point(match_rect.x1, baseline or match_rect.y0)
+        return fitz.Point(match_rect.x1 - offset, baseline or match_rect.y0)
     if rotation == 270:
-        return fitz.Point(match_rect.x1, match_rect.y0)
-    return fitz.Point(match_rect.x0, baseline or match_rect.y1)
+        return fitz.Point(match_rect.x1, match_rect.y0 + offset)
+    return fitz.Point(match_rect.x0 + offset, baseline or match_rect.y1)
 
 
-def replace_text_in_pdf(source_path, destination_path, search_str, replace_str):
+def replace_text_in_pdf(
+    source_path,
+    destination_path,
+    search_str,
+    replace_str,
+    alignment="center",
+):
     """Create a new PDF with matching text replaced and its style preserved."""
     source_path = Path(source_path).resolve()
     destination_path = Path(destination_path).resolve()
@@ -139,6 +160,8 @@ def replace_text_in_pdf(source_path, destination_path, search_str, replace_str):
         raise ValueError(f"Invalid source PDF: {source_path}")
     if destination_path.suffix.lower() != ".pdf":
         raise ValueError("The destination file must have a .pdf extension.")
+    if alignment not in {"center", "left"}:
+        raise ValueError("Alignment must be 'center' or 'left'.")
 
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     doc = fitz.open(source_path)
@@ -165,13 +188,24 @@ def replace_text_in_pdf(source_path, destination_path, search_str, replace_str):
             page.apply_redactions(images=0, graphics=0, text=0)
 
             for match, style in replacements:
-                resource = _font_resource_for_style(doc, page, style, font_cache)
+                font_resource = _font_resource_for_style(
+                    doc, page, style, font_cache
+                )
                 rotation = _rotation_for_direction(style.direction)
+                text_length = font_resource.font.text_length(
+                    replace_str, fontsize=style.size
+                )
                 page.insert_text(
-                    _insertion_point(match, style, rotation),
+                    _insertion_point(
+                        match,
+                        style,
+                        rotation,
+                        text_length,
+                        alignment,
+                    ),
                     replace_str,
                     fontsize=style.size,
-                    fontname=resource,
+                    fontname=font_resource.name,
                     color=style.color,
                     rotate=rotation,
                     overlay=True,
@@ -212,12 +246,25 @@ def main():
         nargs="?",
         help="Destination PDF (default: SOURCE_replaced.pdf)",
     )
+    parser.add_argument(
+        "--align",
+        choices=("center", "left"),
+        default="center",
+        help=(
+            "Align replacement within the removed text width "
+            "(default: center; use left for the previous behavior)"
+        ),
+    )
     args = parser.parse_args()
 
     destination = args.destination or _default_destination(args.source)
     try:
         changed = replace_text_in_pdf(
-            args.source, destination, args.search, args.replace
+            args.source,
+            destination,
+            args.search,
+            args.replace,
+            alignment=args.align,
         )
     except (ValueError, OSError, RuntimeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

@@ -10,6 +10,9 @@ When the font is embedded in the PDF, the replacement preserves:
 - color;
 - baseline and cardinal text orientation.
 
+By default, replacement text is centered within the width occupied by the
+original text. Use `--align left` to retain the previous left-aligned behavior.
+
 If the original font is not embedded, the script uses a standard PDF font that matches the available characteristics (serif/sans-serif/monospaced, regular/bold/italic).
 
 ## Requirements
@@ -27,6 +30,12 @@ pip install pymupdf
 python pdf_replace.py "TEXT_TO_FIND" "REPLACEMENT_TEXT" "source.pdf" "destination.pdf"
 ```
 
+To align the replacement to the original text's starting edge:
+
+```bash
+python pdf_replace.py "TEXT_TO_FIND" "REPLACEMENT_TEXT" "source.pdf" --align left
+```
+
 The destination file is optional. If omitted, it is automatically created next to the source file with the `_replaced` suffix:
 
 ```bash
@@ -41,7 +50,7 @@ This example creates `document_replaced.pdf` and leaves `document.pdf` unchanged
 2. Identifies the text span that covers each occurrence.
 3. Extracts and registers the font embedded in the PDF, including its bold/italic variant.
 4. Removes only the original text through redaction while preserving images and vector graphics.
-5. Inserts the replacement on the original baseline using the detected size, color, and orientation.
+5. Inserts the replacement on the original baseline using the detected size, color, and orientation, centered within the original text width by default.
 6. Saves the result as a new PDF; the source and destination paths cannot be the same.
 
 ## Notes
