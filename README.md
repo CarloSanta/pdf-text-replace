@@ -20,8 +20,47 @@ If the original font is not embedded, the script uses a standard PDF font that m
 - Python 3.10 or later
 - PyMuPDF
 
+### Installing PyMuPDF
+
+Install PyMuPDF through the same Python interpreter that you will use to run
+the script. Using `python -m pip` avoids installing the package into a different
+Python environment by mistake:
+
 ```bash
-pip install pymupdf
+python -m pip install --upgrade pip
+python -m pip install pymupdf
+```
+
+To keep the dependency isolated, you can create a virtual environment first.
+
+On Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install pymupdf
+```
+
+On macOS or Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install pymupdf
+```
+
+Verify that PyMuPDF is available to the active interpreter:
+
+```bash
+python -c "import fitz; print(fitz.__doc__)"
+```
+
+PyMuPDF is installed with the package name `pymupdf`, while this script imports
+it as `fitz`. If `python3 pdf_replace.py ...` reports `ModuleNotFoundError: No
+module named 'fitz'`, install the package specifically for that interpreter:
+
+```bash
+python3 -m pip install pymupdf
 ```
 
 ## Usage
